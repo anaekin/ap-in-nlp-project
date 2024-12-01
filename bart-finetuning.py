@@ -47,7 +47,7 @@ def load_and_preprocess_data(
     prefix="",  # In case of T5 model
 ):
     dataset_name = dataset.split("/")[1]
-    saved_dataset_path = f"./{dataset_name}_tokenized"
+    saved_dataset_path = f"./{dataset_name}_tokenized_{max_source_length}"
     dataset = load_dataset(dataset)
 
     # Load separately for evaluation
@@ -264,11 +264,11 @@ if __name__ == "__main__":
     dataset = "knkarthick/dialogsum"
 
     # For mobile GPU (RTX 3070 Ti) - Takes ~5 hours 30 minutes
-    max_source_length = 512
-    max_target_length = 128
-    learning_rate = 2e-5
-    batch_size = 2
-    grad_accum_steps = 4
+    # max_source_length = 512
+    # max_target_length = 128
+    # learning_rate = 2e-5
+    # batch_size = 2
+    # grad_accum_steps = 4
 
     # For mobile GPU (RTX 3070 Ti) - Balanced Performance and Accuracy - Takes ~6 hours
     # max_source_length = 1024
@@ -285,11 +285,11 @@ if __name__ == "__main__":
     # grad_accum_steps = 4
 
     # For Jupyter Lab - Best (Less performant but more accurate)
-    # max_source_length = 1429
-    # max_target_length = 249
-    # learning_rate = 2e-5
-    # batch_size = 1
-    # grad_accum_steps = 8
+    max_source_length = 1429
+    max_target_length = 249
+    learning_rate = 2e-5
+    batch_size = 1
+    grad_accum_steps = 8
 
     print("##################### Hyperparameters #####################")
     print("Model:", model)
