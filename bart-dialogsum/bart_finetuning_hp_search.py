@@ -165,6 +165,7 @@ def prepare_training_args(params, generation_config=None):
     print("#" * 15 + " Hyperparameters " + "#" * 25)
     print(json.dumps(params, indent=4))
     print("#" * 45)
+    print("\n")
 
     training_args = Seq2SeqTrainingArguments(
         output_dir=params["output_dir"],
@@ -179,7 +180,7 @@ def prepare_training_args(params, generation_config=None):
         gradient_checkpointing=True,
         logging_steps=params["logging_steps"],
         predict_with_generate=True,  # Required for summarization tasks
-        metric_for_best_model="rouge1",  # Use ROUGE-1 for best model selection
+        metric_for_best_model="eval_loss",  # Use ROUGE-1 for best model selection
         load_best_model_at_end=True,  # Load the best model at the end of training
         weight_decay=params["weight_decay"],  # Helps prevent overfitting
         eval_steps=params["eval_steps"],  # Adjust based on dataset size
@@ -200,6 +201,7 @@ def prepare_training_args(params, generation_config=None):
             "num_train_epochs"
         ],  # Smaller batch size requires more epochs
         generation_config=generation_config,  # For generation during evaluation
+        run_name=params["run_name"],
     )
     return training_args
 
@@ -286,7 +288,7 @@ def create_trainer(
     tokenizer,
     dataset,
     generation_config=None,
-    metrics=all_metrics,
+    metrics=None,
     model_init=None,
 ):
     # Prepare the training arguments
@@ -355,7 +357,7 @@ def hyperparameter_space(trial):
     return {
         "project": "ap-in-nlp-project",
         "method": "bayes",
-        "metric": {"goal": "minimize", "name": "validation_loss"},
+        "metric": {"goal": "minimize", "name": "eval_loss"},
         "parameters": {
             "learning_rate": {
                 "distribution": "log_uniform_values",
@@ -429,19 +431,24 @@ def fine_tune_model(params, metrics=None):
             dataset=tokenized_dataset,
             generation_config=model_generation_config,
             metrics=metrics,
-            model_init=lambda trial: model_init(trial, model_checkpoint),
+            model_init=lambda trial: model_init(
+                trial, model_checkpoint
+            ),  # Mandatory for hyperparameter search
         )
 
-        best_run = sweeper.hyperparameter_search(
+        best_sweep = sweeper.hyperparameter_search(
             direction="minimize",  # Minimize validation loss
             hp_space=hyperparameter_space,  # Hyperparameter search space
             backend="wandb",  # Use Weights & Biases for tracking
-            n_trials=20,
+            n_trials=params["n_trials"],
         )
 
         # Update params with the best hyperparameters
-        params = {**params, **best_run.hyperparameters}
+        params = {**params, **best_sweep.hyperparameters}
+        params["run_name"] = "best_run"
         save_params(params)
+
+        wandb.teardown()
 
         # Create a model trainer
         trainer = create_trainer(
@@ -450,7 +457,8 @@ def fine_tune_model(params, metrics=None):
             tokenizer=tokenizer,
             dataset=tokenized_dataset,
             generation_config=model_generation_config,
-            metrics=all_metrics,
+            metrics=metrics,
+            model_init=lambda trial: model_init(trial, model_checkpoint),
         )
         # Train the model
         trainer.train()
@@ -468,19 +476,24 @@ def fine_tune_model(params, metrics=None):
         print("OOM exception encountered.")
         print("\n")
     finally:
-        print("#" * 15 + " Hyperparameters " + "#" * 25)
+        wandb.finish()
+        wandb.teardown()
+        print("#" * 15 + " Final Hyperparameters " + "#" * 25)
         print(json.dumps(params, indent=4))
         print("#" * 45)
+        print("\n")
         clear_cache(model, tokenizer)
 
 
 ################################################################################
 if __name__ == "__main__":
+    print("\n")
 
     def get_params(
         model_checkpoint,
         training_output_dir,
-        dataset_output_folder,
+        dataset_output_dir,
+        use_small_dataset=False,
     ):
 
         # For Jupyter Lab
@@ -493,16 +506,24 @@ if __name__ == "__main__":
         # warmup_steps = total_steps * warmup_steps_factor = 1968 * 0.2 = ~393
         # save_steps = eval_steps * save_steps_multiple = 196 * 3 = 588
         ##############################
+        training_output_dir = training_output_dir + (
+            "_small" if use_small_dataset else ""
+        )
+        dataset_output_dir = dataset_output_dir + (
+            "_small" if use_small_dataset else ""
+        )
         params = {
             # Save folder paths
             "model_checkpoint": model_checkpoint,
             "dataset_name": "knkarthick/dialogsum",
-            "output_dir": f"./{training_output_dir}/training-output",
-            "logging_dir": f"./{training_output_dir}/training-logs",
+            "output_dir": f"./{training_output_dir}/training_output",
+            "logging_dir": f"./{training_output_dir}/training_logs",
             "cache_dir": f"./{training_output_dir}/cache",
-            "model_save_path": f"./{training_output_dir}/finetuned-output",
+            "model_save_path": f"./{training_output_dir}/finetuned_output",
             "params_save_path": f"./{training_output_dir}/training_params.json",
-            "dataset_save_path": f"./{dataset_output_folder}/dataset-preprocessing-output",
+            "dataset_save_path": f"./{dataset_output_dir}",
+            # Do not change
+            "run_name": None,
             # Hyperparameters
             "prefix": "",  # In case of T5 model, use 'summarize: '
             "max_source_length": 512,  # Check dataset-analysis.ipynb for max_source_length
@@ -534,14 +555,15 @@ if __name__ == "__main__":
             "use_generation_config": False,
             "use_early_stopping": True,
             "early_stopping_patience": 3,
-            "use_small_dataset": False,
+            "use_small_dataset": use_small_dataset,
+            "n_trials": 20,
         }
 
         return params
 
     # Fine-tuning the model ##############
     # Change this only if you are changing tokenization process, max_source_length, or max_target_length
-    dataset_output_folder = "tokenized_dataset"
+    dataset_output_dir = "dataset_output"
 
     # Model to load and fine-tune
     model_checkpoint = "facebook/bart-large-xsum"
@@ -552,6 +574,7 @@ if __name__ == "__main__":
     params = get_params(
         model_checkpoint,
         training_output_dir,
-        dataset_output_folder,
+        dataset_output_dir,
+        use_small_dataset=False,  # If True, then probably use like 2-3 n_trials in params
     )
     fine_tune_model(params, metrics=["rouge", "bleu"])
