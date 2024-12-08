@@ -36,7 +36,7 @@ from nltk.tokenize import sent_tokenize
 # Set CUDA configurations for training and parallelism
 os.environ["WANDB_WATCH"] = "all"
 os.environ["WANDB_PROJECT"] = "ap-in-nlp-project"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Load the ROUGE metric
@@ -165,6 +165,7 @@ def prepare_training_args(params, generation_config=None):
     print("#" * 15 + " Hyperparameters " + "#" * 25)
     print(json.dumps(params, indent=4))
     print("#" * 45)
+    print("\n")
 
     training_args = Seq2SeqTrainingArguments(
         output_dir=params["output_dir"],
@@ -480,6 +481,7 @@ def fine_tune_model(params, metrics=None):
         print("#" * 15 + " Final Hyperparameters " + "#" * 25)
         print(json.dumps(params, indent=4))
         print("#" * 45)
+        print("\n")
         clear_cache(model, tokenizer)
 
 
