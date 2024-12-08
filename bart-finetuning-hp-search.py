@@ -476,6 +476,7 @@ def fine_tune_model(params, metrics=None):
         print("\n")
     finally:
         wandb.finish()
+        wandb.teardown()
         print("#" * 15 + " Final Hyperparameters " + "#" * 25)
         print(json.dumps(params, indent=4))
         print("#" * 45)
