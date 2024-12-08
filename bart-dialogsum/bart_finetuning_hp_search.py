@@ -11,7 +11,6 @@ import wandb
 from datasets import load_dataset, load_from_disk
 from transformers import (
     AutoTokenizer,
-    AutoConfig,
     AutoModelForSeq2SeqLM,
     DataCollatorForSeq2Seq,
     Seq2SeqTrainingArguments,
@@ -165,7 +164,6 @@ def prepare_training_args(params, generation_config=None):
     print("#" * 15 + " Hyperparameters " + "#" * 25)
     print(json.dumps(params, indent=4))
     print("#" * 45)
-    print("\n")
 
     training_args = Seq2SeqTrainingArguments(
         output_dir=params["output_dir"],
@@ -441,6 +439,7 @@ def fine_tune_model(params, metrics=None):
             hp_space=hyperparameter_space,  # Hyperparameter search space
             backend="wandb",  # Use Weights & Biases for tracking
             n_trials=params["n_trials"],
+            sweep_id=params["sweep_id"],
         )
 
         # Update params with the best hyperparameters
@@ -516,12 +515,12 @@ if __name__ == "__main__":
             # Save folder paths
             "model_checkpoint": model_checkpoint,
             "dataset_name": "knkarthick/dialogsum",
-            "output_dir": f"./{training_output_dir}/training_output",
-            "logging_dir": f"./{training_output_dir}/training_logs",
+            "output_dir": f"./{training_output_dir}/training-output",
+            "logging_dir": f"./{training_output_dir}/training-logs",
             "cache_dir": f"./{training_output_dir}/cache",
-            "model_save_path": f"./{training_output_dir}/finetuned_output",
+            "model_save_path": f"./{training_output_dir}/finetuned-output",
             "params_save_path": f"./{training_output_dir}/training_params.json",
-            "dataset_save_path": f"./{dataset_output_dir}",
+            "dataset_save_path": f"./{dataset_output_dir}/dataset-preprocessing-output",
             # Do not change
             "run_name": None,
             # Hyperparameters
@@ -557,13 +556,14 @@ if __name__ == "__main__":
             "early_stopping_patience": 3,
             "use_small_dataset": use_small_dataset,
             "n_trials": 20,
+            "sweep_id": "anaekin/ap-in-nlp-project/lhnzxqoq",  # If you want to resume a sweep, else pass None
         }
 
         return params
 
     # Fine-tuning the model ##############
     # Change this only if you are changing tokenization process, max_source_length, or max_target_length
-    dataset_output_dir = "dataset_output"
+    dataset_output_folder = "tokenized_dataset"
 
     # Model to load and fine-tune
     model_checkpoint = "facebook/bart-large-xsum"
@@ -574,7 +574,7 @@ if __name__ == "__main__":
     params = get_params(
         model_checkpoint,
         training_output_dir,
-        dataset_output_dir,
+        dataset_output_folder,
         use_small_dataset=False,  # If True, then probably use like 2-3 n_trials in params
     )
     fine_tune_model(params, metrics=["rouge", "bleu"])
