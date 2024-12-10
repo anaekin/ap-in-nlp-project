@@ -1,5 +1,5 @@
 # Install packages if required
-# pip install torch transformers dataset evaluate nltk accelerate absl-py rouge_score bert_score wandb
+# pip install torch transformers dataset evaluate nltk accelerate absl-py rouge_score bert_score wandb scikit-learn
 
 # For RuntimeError: NCCL Error 2: unhandled system error
 # export CUDA_VISIBLE_DEVICES=<gpu-id>
@@ -11,12 +11,13 @@ import wandb
 from datasets import load_dataset, load_from_disk
 from transformers import (
     AutoTokenizer,
-    AutoModelForSeq2SeqLM,
-    DataCollatorForSeq2Seq,
-    Seq2SeqTrainingArguments,
-    Seq2SeqTrainer,
-    GenerationConfig,
     EarlyStoppingCallback,
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    DataCollatorWithPadding,
+    TrainingArguments,
+    Trainer,
+    AutoConfig,
 )
 from evaluate import load
 import os
@@ -25,22 +26,72 @@ import gc
 import torch
 import json
 import nltk
+from sklearn.metrics import (
+    roc_auc_score,
+    classification_report,
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+)
 
 nltk.download("punkt")
 
 from nltk.tokenize import sent_tokenize
 
+WANDB_PROJECT_NAME = "ap-in-nlp-project-bert"
+
 # from bitsandbytes.optim import AdamW8bit  # If using 8bit optimizer
 
 # Set CUDA configurations for training and parallelism
 os.environ["WANDB_WATCH"] = "all"
-os.environ["WANDB_PROJECT"] = "ap-in-nlp-project"
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["WANDB_PROJECT"] = WANDB_PROJECT_NAME
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Load the ROUGE metric
-all_metrics = ["rouge", "bertscore", "bleu", "meteor"]
+all_metrics = ["accuracy", "f1", "precision", "recall", "roc_auc"]
 loaded_metrics = {metric: load(metric) for metric in all_metrics}
+print("Metrics loaded: ", all_metrics)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+# List of GoEmotions labels
+goemotions_labels = [
+    "admiration",
+    "amusement",
+    "anger",
+    "annoyance",
+    "approval",
+    "caring",
+    "confusion",
+    "curiosity",
+    "desire",
+    "disappointment",
+    "disapproval",
+    "disgust",
+    "embarrassment",
+    "excitement",
+    "fear",
+    "gratitude",
+    "grief",
+    "joy",
+    "love",
+    "nervousness",
+    "optimism",
+    "pride",
+    "realization",
+    "relief",
+    "remorse",
+    "sadness",
+    "surprise",
+    "neutral",
+]
+
+# Create label2id and id2label mappings
+label2id = {label: idx for idx, label in enumerate(goemotions_labels)}
+id2label = {idx: label for idx, label in enumerate(goemotions_labels)}
 
 
 def reduce_dataset_sizes(dataset, train_split=100, val_split=20, test_split=30):
@@ -67,59 +118,40 @@ def reduce_dataset_sizes(dataset, train_split=100, val_split=20, test_split=30):
     return dataset
 
 
-def clear_cache(model, tokenizer):
+def clear_cache(model, tokenizer, dataset):
     print("Freeing CUDA memory...")
     del model  # Delete the model object
     del tokenizer  # Delete the tokenizer object
+    del dataset
     torch.cuda.empty_cache()  # Clear the CUDA cache
     gc.collect()  # Collect unused objects
     print("CUDA cache cleared and GPU memory released.")
     print("\n")
 
 
-def check_device():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    return device
-
-
-def tokenize_dataset(
-    dataset,
-    tokenizer,
-    params,
-):
+def tokenize_dataset(dataset, tokenizer, params):
     max_source_length = params["max_source_length"]
-    max_target_length = params["max_target_length"]
     prefix = params["prefix"]
 
     def tokenize_function(examples):
-        inputs = [prefix + doc for doc in examples["dialogue"]]
-        summaries = examples["summary"]
-
-        # Tokenize inputs and targets (summaries)
+        inputs = [prefix + doc for doc in examples["text"]]
         model_inputs = tokenizer(
             inputs,
+            padding="max_length",
+            truncation=True,
             max_length=max_source_length,
-            truncation=True,
         )
 
-        model_target = tokenizer(
-            summaries,
-            max_length=max_target_length,
-            truncation=True,
-        )
+        num_labels = params["num_labels"]
+        label_vectors = [
+            [1.0 if i in labels else 0.0 for i in range(num_labels)]
+            for labels in examples["labels"]
+        ]
 
-        # Directly assign labels to model inputs
-        model_inputs["labels"] = model_target["input_ids"]
-
+        model_inputs["labels"] = torch.tensor(label_vectors, dtype=torch.float32)
         return model_inputs
 
-    # Tokenizing and returning dataset with optimized structure
-    return dataset.map(
-        tokenize_function,
-        batched=True,
-        remove_columns=["dialogue", "summary", "topic"],  # Remove original text columns
-    )
+    return dataset.map(tokenize_function, batched=True, remove_columns=["text", "id"])
 
 
 def preprocess_and_tokenize_dataset(
@@ -136,7 +168,7 @@ def preprocess_and_tokenize_dataset(
         print("Tokenized dataset loaded.")
         print("\n")
     else:
-        dataset = load_dataset(dataset_name)
+        dataset = load_dataset(dataset_name, "simplified")
 
         if params["use_small_dataset"]:
             dataset = reduce_dataset_sizes(dataset)
@@ -152,33 +184,36 @@ def preprocess_and_tokenize_dataset(
         print(f"Tokenized dataset saved to {dataset_save_path}.")
         print("\n")
 
-    # Set the format to PyTorch
     tokenized_dataset.set_format(
-        type="torch", columns=["input_ids", "attention_mask", "labels"]
+        type="torch",
+        columns=["input_ids", "attention_mask", "token_type_ids", "labels"],
     )
 
     return tokenized_dataset
 
 
-def prepare_training_args(params, generation_config=None):
+def prepare_training_args(params):
     print("#" * 15 + " Hyperparameters " + "#" * 25)
     print(json.dumps(params, indent=4))
     print("#" * 45)
 
-    training_args = Seq2SeqTrainingArguments(
+    training_args = TrainingArguments(
         output_dir=params["output_dir"],
         save_total_limit=3,
         report_to="wandb",
         dataloader_num_workers=2,  # Prevent memory bottlenecks
         fp16=True,  # Enable mixed precision for memory efficiency
+        logging_first_step=True,
         logging_dir=params["logging_dir"],
         logging_strategy="steps",
         eval_strategy="steps",
         save_strategy="steps",
         gradient_checkpointing=True,
         logging_steps=params["logging_steps"],
-        predict_with_generate=True,  # Required for summarization tasks
-        metric_for_best_model="eval_loss",  # Use ROUGE-1 for best model selection
+        greater_is_better=True,
+        metric_for_best_model=params[
+            "metric_for_best_model"
+        ],  # Use ROUGE-1 for best model selection
         load_best_model_at_end=True,  # Load the best model at the end of training
         weight_decay=params["weight_decay"],  # Helps prevent overfitting
         eval_steps=params["eval_steps"],  # Adjust based on dataset size
@@ -198,102 +233,73 @@ def prepare_training_args(params, generation_config=None):
         num_train_epochs=params[
             "num_train_epochs"
         ],  # Smaller batch size requires more epochs
-        generation_config=generation_config,  # For generation during evaluation
         run_name=params["run_name"],
     )
     return training_args
 
 
-def prepare_data_collator(tokenizer, model=None):
-    return DataCollatorForSeq2Seq(tokenizer, model)
+def compute_metrics_function(eval_pred, params):
+    logits, labels = eval_pred
+    logits = torch.tensor(logits)  # Convert to tensors
+    y_score = torch.sigmoid(logits)  # More efficient with GPU
+    y_pred = (y_score >= params["threshold"]).cpu().numpy().astype(np.int32)
+    y_true = np.array(labels, dtype=np.int32)
+
+    clf_report = classification_report(y_true, y_pred, output_dict=True)
+    per_class_f1 = {
+        f"class_{cls}_f1": clf_report[str(cls)]["f1-score"]
+        for cls in range(y_true.shape[1])  # Ensure this matches the number of classes
+    }
+
+    results = {
+        "f1": f1_score(y_true, y_pred, average="macro"),
+        "accuracy": accuracy_score(y_true, y_pred),
+        "recall": recall_score(y_true, y_pred, average="macro"),
+        "precision": precision_score(y_true, y_pred, average="macro"),
+        "roc_auc": roc_auc_score(y_true, y_score, average="macro", multi_class="ovr"),
+        **per_class_f1,
+    }
+
+    return results
 
 
-def compute_metrics_function(eval_preds, tokenizer, metrics=all_metrics):
-    predictions, labels = eval_preds
-    # Decode generated summaries into text
-    decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
-    # Replace -100 in the labels as we can't decode them
-    labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-    # Decode reference summaries into text
-    decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-    # ROUGE expects a newline after each sentence
-    decoded_preds = ["\n".join(sent_tokenize(pred.strip())) for pred in decoded_preds]
-    decoded_labels = [
-        "\n".join(sent_tokenize(label.strip())) for label in decoded_labels
-    ]
+class CustomDataCollator(DataCollatorWithPadding):
+    def __call__(self, features):
+        batch = super().__call__(features)
+        batch["labels"] = torch.stack([f["labels"].to(torch.float32) for f in features])
+        return batch
 
-    print("decoded_preds: ", decoded_preds[0])
-    print("\n")
-    print("decoded_labels: ", decoded_labels[0])
-    print("\n")
 
-    results = {}
-    for metric_name in metrics:
-        try:
-            metric = loaded_metrics[metric_name]
-            if metric_name == "rouge":
-                metric_result = metric.compute(
-                    predictions=decoded_preds,
-                    references=decoded_labels,
-                    use_stemmer=True,
-                )
-                results.update(
-                    {key: value * 100 for key, value in metric_result.items()}
-                )
-            elif metric_name == "bertscore":
-                metric_result = metric.compute(
-                    predictions=decoded_preds, references=decoded_labels, lang="en"
-                )  # Fixed: Removed string conversion
-                results.update(
-                    {
-                        f"bert_{key}": np.mean(value)
-                        for key, value in metric_result.items()
-                    }
-                )  # Improved key naming
-            else:  # bleu, meteor
-                metric_result = metric.compute(
-                    predictions=decoded_preds, references=decoded_labels
-                )
-                results.update(
-                    {
-                        key: value * 100
-                        for key, value in metric_result.items()
-                        if key != "precisions"
-                    }
-                )
-
-        except Exception as e:
-            print(
-                f"Error computing {metric_name}: {e}"
-            )  # More informative error message
-
-    # Add mean generated and reference lengths
-    prediction_lens = [
-        np.count_nonzero(pred != tokenizer.pad_token_id) for pred in predictions
-    ]
-    reference_lens = [
-        np.count_nonzero(label != tokenizer.pad_token_id) for label in labels
-    ]
-    results["gen_len"] = np.mean(prediction_lens)
-    results["avg_ref_len"] = np.mean(reference_lens)
-
-    return {k: round(v, 4) for k, v in results.items()}
+def model_init_function(
+    trial,
+    params,
+):
+    model_checkpoint = params["model_checkpoint"]
+    num_labels = params["num_labels"]
+    # Load the model
+    print(f"Loading the model {model_checkpoint}...")
+    config = AutoConfig.from_pretrained(
+        model_checkpoint,
+        num_labels=num_labels,
+        problem_type="multi_label_classification",
+        id2label=id2label,
+        label2id=label2id,
+    )
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_checkpoint, config=config
+    )
+    model.to(device)
+    return model
 
 
 def create_trainer(
-    model,
     params,
     tokenizer,
-    dataset,
-    generation_config=None,
-    metrics=None,
-    model_init=None,
+    tokenized_dataset,
+    model=None,
 ):
     # Prepare the training arguments
-    training_args = prepare_training_args(params, generation_config)
-
-    # Prepare the data collator
-    data_collator = prepare_data_collator(tokenizer, model)
+    training_args = prepare_training_args(params)
 
     callbacks = []
     if params["use_early_stopping"]:
@@ -303,23 +309,21 @@ def create_trainer(
             )
         )
 
-    trainer = Seq2SeqTrainer(
-        model=None if model_init is not None else model,
+    data_collator = CustomDataCollator(tokenizer)
+
+    model_init = lambda trial: model_init_function(trial, params)
+
+    trainer = Trainer(
+        model=model,
         args=training_args,
-        train_dataset=dataset["train"],
-        eval_dataset=dataset["validation"],
-        data_collator=data_collator,
+        train_dataset=tokenized_dataset["train"],
+        eval_dataset=tokenized_dataset["validation"],
         callbacks=callbacks,
+        data_collator=data_collator,
         compute_metrics=(
-            (
-                lambda eval_preds: compute_metrics_function(
-                    eval_preds, tokenizer, metrics
-                )
-            )
-            if len(metrics) > 0
-            else None
+            lambda eval_pred: compute_metrics_function(eval_pred, params=params)
         ),
-        model_init=model_init,
+        model_init=None if model is not None else model_init,
     )
     return trainer
 
@@ -342,20 +346,11 @@ def save_params(params):
     print("\n")
 
 
-def model_init(
-    trial,
-    model_checkpoint,
-):
-    return AutoModelForSeq2SeqLM.from_pretrained(
-        model_checkpoint,
-    )
-
-
 def hyperparameter_space(trial):
     return {
-        "project": "ap-in-nlp-project",
+        "project": WANDB_PROJECT_NAME,
         "method": "bayes",
-        "metric": {"goal": "minimize", "name": "eval_loss"},
+        "metric": {"goal": "maximize", "name": "eval_f1"},
         "parameters": {
             "learning_rate": {
                 "distribution": "log_uniform_values",
@@ -366,7 +361,7 @@ def hyperparameter_space(trial):
                 "values": [4, 8, 12, 16],
             },
             "gradient_accumulation_steps": {
-                "values": [2, 4, 6, 8],
+                "values": [4, 6, 8],
             },
             "num_train_epochs": {
                 "values": [5, 10, 15],
@@ -385,9 +380,8 @@ def hyperparameter_space(trial):
     }
 
 
-def fine_tune_model(params, metrics=None):
+def fine_tune_model(params):
     model_checkpoint = params["model_checkpoint"]
-    device = check_device()
     # Preprocessing #####################
     # Load the tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
@@ -407,62 +401,52 @@ def fine_tune_model(params, metrics=None):
     )  # 196.875 * 10 = ~1968
 
     # Training #########################
-    # Load the model
-    print(f"Loading the model {model_checkpoint}...")
-    model = AutoModelForSeq2SeqLM.from_pretrained(model_checkpoint)
-    model.to(device)
-    print(f"Model loaded on device: {model.device}.")
-    print("\n")
-
-    # Load the generation config
-    model_generation_config = None
-    if params["use_generation_config"]:
-        model_generation_config, _ = GenerationConfig.from_pretrained(
-            model_checkpoint, **params["generation_config"], return_unused_kwargs=True
-        )
 
     try:
-        sweeper = create_trainer(
-            model,
-            params,
-            tokenizer=tokenizer,
-            dataset=tokenized_dataset,
-            generation_config=model_generation_config,
-            metrics=metrics,
-            model_init=lambda trial: model_init(
-                trial, model_checkpoint
-            ),  # Mandatory for hyperparameter search
-        )
+        if params["n_trials"] is not None:
+            sweeper = create_trainer(
+                params,
+                tokenizer=tokenizer,
+                tokenized_dataset=tokenized_dataset,
+            )
 
-        best_sweep = sweeper.hyperparameter_search(
-            direction="minimize",  # Minimize validation loss
-            hp_space=hyperparameter_space,  # Hyperparameter search space
-            backend="wandb",  # Use Weights & Biases for tracking
-            n_trials=params["n_trials"],
-            sweep_id=params["sweep_id"],
-        )
+            best_sweep = sweeper.hyperparameter_search(
+                direction="maximize",  # Minimize validation loss
+                hp_space=hyperparameter_space,  # Hyperparameter search space
+                backend="wandb",  # Use Weights & Biases for tracking
+                n_trials=params["n_trials"],
+                sweep_id=params["sweep_id"],
+            )
 
-        # Update params with the best hyperparameters
-        params = {**params, **best_sweep.hyperparameters}
-        params["run_name"] = "best_run"
-        save_params(params)
+            # Update params with the best hyperparameters
+            params = {**params, **best_sweep.hyperparameters}
+            save_params(params)
 
-        wandb.teardown()
+            wandb.teardown()
+
+        best_run = wandb.init()
+        params["run_name"] = best_run.name
+
+        model = model_init_function(None, params)
 
         # Create a model trainer
         trainer = create_trainer(
-            model,
             params,
             tokenizer=tokenizer,
-            dataset=tokenized_dataset,
-            generation_config=model_generation_config,
-            metrics=metrics,
-            model_init=lambda trial: model_init(trial, model_checkpoint),
+            tokenized_dataset=tokenized_dataset,
+            model=model,
         )
         # Train the model
         trainer.train()
 
         print("Model training complete.")
+        print("\n")
+
+        print("Evaluating fine-tuned model...")
+        final_results = trainer.evaluate(eval_dataset=tokenized_dataset["test"])
+        print("#" * 15 + " Final Results " + "#" * 25)
+        print(json.dumps(final_results, indent=4))
+        print("#" * 45)
         print("\n")
 
         # Save the model
@@ -471,17 +455,18 @@ def fine_tune_model(params, metrics=None):
             tokenizer,
             params,
         )
+
+        wandb.finish()
+        wandb.teardown()
     except torch.cuda.OutOfMemoryError:
         print("OOM exception encountered.")
         print("\n")
     finally:
-        wandb.finish()
-        wandb.teardown()
         print("#" * 15 + " Final Hyperparameters " + "#" * 25)
         print(json.dumps(params, indent=4))
         print("#" * 45)
         print("\n")
-        clear_cache(model, tokenizer)
+        clear_cache(model, tokenizer, tokenized_dataset)
 
 
 ################################################################################
@@ -490,9 +475,12 @@ if __name__ == "__main__":
 
     def get_params(
         model_checkpoint,
+        dataset_name,
         training_output_dir,
         dataset_output_dir,
         use_small_dataset=False,
+        n_trials=None,
+        sweep_id=None,
     ):
 
         # For Jupyter Lab
@@ -514,7 +502,7 @@ if __name__ == "__main__":
         params = {
             # Save folder paths
             "model_checkpoint": model_checkpoint,
-            "dataset_name": "knkarthick/dialogsum",
+            "dataset_name": dataset_name,
             "output_dir": f"./{training_output_dir}/training-output",
             "logging_dir": f"./{training_output_dir}/training-logs",
             "cache_dir": f"./{training_output_dir}/cache",
@@ -525,15 +513,15 @@ if __name__ == "__main__":
             "run_name": None,
             # Hyperparameters
             "prefix": "",  # In case of T5 model, use 'summarize: '
-            "max_source_length": 512,  # Check dataset-analysis.ipynb for max_source_length
-            "max_target_length": 90,  # Check dataset-analysis.ipynb for max_target_length
+            "max_source_length": 200,  # Check dataset-analysis.ipynb for max_source_length
             # TrainingArguments
+            "metric_for_best_model": "f1",
             "fp16": True,
             "weight_decay": 0.01,
-            "learning_rate": 5e-5,
-            "per_device_train_batch_size": 16,
-            "gradient_accumulation_steps": 8,
-            "num_train_epochs": 10,
+            "learning_rate": 2e-5,
+            "per_device_train_batch_size": 4,
+            "gradient_accumulation_steps": 4,
+            "num_train_epochs": 2,
             "lr_scheduler_type": "cosine",
             "warmup_ratio": 0.2,
             "eval_steps": 0.1,
@@ -555,26 +543,35 @@ if __name__ == "__main__":
             "use_early_stopping": True,
             "early_stopping_patience": 3,
             "use_small_dataset": use_small_dataset,
-            "n_trials": 20,
-            "sweep_id": "anaekin/ap-in-nlp-project/lhnzxqoq",  # If you want to resume a sweep, else pass None
+            "n_trials": n_trials,
+            "sweep_id": sweep_id,
+            "metrics": all_metrics,
+            # For Bert Model only
+            "num_labels": len(goemotions_labels),
+            "threshold": 0.7,
         }
 
         return params
 
     # Fine-tuning the model ##############
     # Change this only if you are changing tokenization process, max_source_length, or max_target_length
-    dataset_output_folder = "tokenized_dataset"
+    dataset_output_folder = "go_emotions_tokenized_dataset"
+
+    dataset_name = "google-research-datasets/go_emotions"
 
     # Model to load and fine-tune
-    model_checkpoint = "facebook/bart-large-xsum"
+    model_checkpoint = "google-bert/bert-base-uncased"
     # model_checkpoint = "facebook/bart-large-cnn"
     # model_checkpoint = "facebook/bart-large"
-    training_output_dir = "hp_search_output"
+    training_output_dir = "bert_hp_search_output"
 
     params = get_params(
         model_checkpoint,
+        dataset_name,
         training_output_dir,
         dataset_output_folder,
-        use_small_dataset=False,  # If True, then probably use like 2-3 n_trials in params
+        use_small_dataset=True,  # If True, then probably use like 2-3 n_trials in params
+        n_trials=None,  # If you are resuming a sweep then update the n_trials by subtracting number of completed trials. Ex - n_trials = 10, already run = 6, then update n_trials = 4
+        sweep_id=None,  # If you want to resume a sweep, else pass None
     )
-    fine_tune_model(params, metrics=["rouge", "bleu"])
+    fine_tune_model(params)

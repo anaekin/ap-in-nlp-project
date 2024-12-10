@@ -1,4 +1,6 @@
-bart-dialogsum/*_output/
+*_output/
+*_dataset/
+wandb/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
