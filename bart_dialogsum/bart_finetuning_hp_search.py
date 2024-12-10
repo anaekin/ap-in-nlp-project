@@ -168,7 +168,6 @@ def prepare_training_args(params, generation_config=None):
         output_dir=params["output_dir"],
         save_total_limit=3,
         report_to="wandb",
-        dataloader_num_workers=2,  # Prevent memory bottlenecks
         fp16=True,  # Enable mixed precision for memory efficiency
         logging_dir=params["logging_dir"],
         logging_strategy="steps",
