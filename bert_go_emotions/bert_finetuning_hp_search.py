@@ -363,7 +363,7 @@ def hyperparameter_space(trial):
                 "values": [4, 6, 8],
             },
             "num_train_epochs": {
-                "values": [5, 10, 15],
+                "values": [2, 3],
             },
             "weight_decay": {
                 "distribution": "log_uniform_values",
@@ -379,7 +379,7 @@ def hyperparameter_space(trial):
     }
 
 
-def fine_tune_model(params):
+def fine_tune_model(params, evaluate=False):
     model_checkpoint = params["model_checkpoint"]
     # Preprocessing #####################
     # Load the tokenizer
@@ -441,12 +441,13 @@ def fine_tune_model(params):
         print("Model training complete.")
         print("\n")
 
-        print("Evaluating fine-tuned model...")
-        final_results = trainer.evaluate(eval_dataset=tokenized_dataset["test"])
-        print("#" * 15 + " Final Results " + "#" * 25)
-        print(json.dumps(final_results, indent=4))
-        print("#" * 45)
-        print("\n")
+        if evaluate:
+            print("Evaluating fine-tuned model...")
+            final_results = trainer.evaluate(eval_dataset=tokenized_dataset["test"])
+            print("#" * 15 + " Final Results " + "#" * 25)
+            print(json.dumps(final_results, indent=4))
+            print("#" * 45)
+            print("\n")
 
         # Save the model
         save_model(
@@ -573,4 +574,4 @@ if __name__ == "__main__":
         n_trials=None,  # If you are resuming a sweep then update the n_trials by subtracting number of completed trials. Ex - n_trials = 10, already run = 6, then update n_trials = 4
         sweep_id=None,  # If you want to resume a sweep, else pass None
     )
-    fine_tune_model(params)
+    fine_tune_model(params, evaluate=False)
