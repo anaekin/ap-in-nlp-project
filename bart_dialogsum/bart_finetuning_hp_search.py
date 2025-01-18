@@ -31,12 +31,12 @@ nltk.download("punkt")
 
 from nltk.tokenize import sent_tokenize
 
-WANDB_PROJECT_NAME = "ap-in-nlp-project"
+WANDB_PROJECT_NAME = "ap-in-nlp-project-bart"
 
 # Set CUDA configurations for training and parallelism
 os.environ["WANDB_WATCH"] = "all"
 os.environ["WANDB_PROJECT"] = WANDB_PROJECT_NAME
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Load the ROUGE metric
@@ -168,6 +168,7 @@ def prepare_training_args(params, generation_config=None):
         output_dir=params["output_dir"],
         save_total_limit=3,
         report_to="wandb",
+        dataloader_num_workers=2,  # Prevent memory bottlenecks
         fp16=True,  # Enable mixed precision for memory efficiency
         logging_dir=params["logging_dir"],
         logging_strategy="steps",
@@ -524,13 +525,13 @@ if __name__ == "__main__":
             # TrainingArguments
             "metric_for_best_model": "eval_loss",
             "fp16": True,
-            "weight_decay": 0.01,
-            "learning_rate": 5e-5,
-            "per_device_train_batch_size": 16,
-            "gradient_accumulation_steps": 8,
-            "num_train_epochs": 10,
+            "weight_decay": 0.06,
+            "learning_rate": 0.000001,
+            "per_device_train_batch_size": 12,
+            "gradient_accumulation_steps": 6,
+            "num_train_epochs": 15,
             "lr_scheduler_type": "cosine",
-            "warmup_ratio": 0.2,
+            "warmup_ratio": 0.18,
             "eval_steps": 0.1,
             "save_steps": 0.2,
             "logging_steps": 0.02,
@@ -571,7 +572,7 @@ if __name__ == "__main__":
         model_checkpoint,
         training_output_dir,
         dataset_output_folder,
-        use_small_dataset=True,  # If True, then probably use like 2-3 n_trials in params
+        use_small_dataset=False,  # If True, then probably use like 2-3 n_trials in params
         n_trials=None,  # If you are resuming a sweep then update the n_trials by subtracting number of completed trials. Ex - n_trials = 10, already run = 6, then update n_trials = 4
         sweep_id=None,  # If you want to resume a sweep, else pass None
     )

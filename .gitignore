@@ -1,6 +1,8 @@
 *_output/
 *_dataset/
 wandb/
+sentence_level_*.json
+jo/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

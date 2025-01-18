@@ -527,7 +527,7 @@ if __name__ == "__main__":
             "eval_steps": 0.1,
             "save_steps": 0.2,
             "logging_steps": 0.02,
-            # GenerationConfig
+            # GenerationConfig (Not for BERT)
             "generation_config": (
                 {
                     "_from_model_config": False,
