@@ -46,7 +46,7 @@ WANDB_PROJECT_NAME = "ap-in-nlp-project-bert"
 # Set CUDA configurations for training and parallelism
 os.environ["WANDB_WATCH"] = "all"
 os.environ["WANDB_PROJECT"] = WANDB_PROJECT_NAME
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Load the ROUGE metric
@@ -244,6 +244,9 @@ def compute_metrics_function(eval_pred, params):
     y_pred = (y_score >= params["threshold"]).cpu().numpy().astype(np.int32)
     y_true = np.array(labels, dtype=np.int32)
 
+    print("y_pred:", y_pred)
+    print("y_true:", y_true)
+
     clf_report = classification_report(y_true, y_pred, output_dict=True)
     per_class_f1 = {
         f"class_{cls}_f1": clf_report[str(cls)]["f1-score"]
@@ -349,7 +352,7 @@ def hyperparameter_space(trial):
     return {
         "project": WANDB_PROJECT_NAME,
         "method": "bayes",
-        "metric": {"goal": "maximize", "name": "eval_f1"},
+        "metric": {"goal": "maximize", "name": "eval_precision"},
         "parameters": {
             "learning_rate": {
                 "distribution": "log_uniform_values",
@@ -357,13 +360,13 @@ def hyperparameter_space(trial):
                 "max": 1e-4,
             },
             "per_device_train_batch_size": {
-                "values": [4, 8, 12, 16],
+                "values": [4, 8, 12],
             },
             "gradient_accumulation_steps": {
                 "values": [4, 6, 8],
             },
             "num_train_epochs": {
-                "values": [2, 3],
+                "values": [3, 4, 5],
             },
             "weight_decay": {
                 "distribution": "log_uniform_values",
@@ -515,15 +518,15 @@ if __name__ == "__main__":
             "prefix": "",  # In case of T5 model, use 'summarize: '
             "max_source_length": 200,  # Check dataset-analysis.ipynb for max_source_length
             # TrainingArguments
-            "metric_for_best_model": "f1",
+            "metric_for_best_model": "accuracy",
             "fp16": True,
             "weight_decay": 0.01,
             "learning_rate": 2e-5,
             "per_device_train_batch_size": 4,
             "gradient_accumulation_steps": 4,
-            "num_train_epochs": 2,
+            "num_train_epochs": 4,
             "lr_scheduler_type": "cosine",
-            "warmup_ratio": 0.2,
+            "warmup_ratio": None,
             "eval_steps": 0.1,
             "save_steps": 0.2,
             "logging_steps": 0.02,
@@ -570,7 +573,7 @@ if __name__ == "__main__":
         dataset_name,
         training_output_dir,
         dataset_output_folder,
-        use_small_dataset=True,  # If True, then probably use like 2-3 n_trials in params
+        use_small_dataset=False,  # If True, then probably use like 2-3 n_trials in params
         n_trials=None,  # If you are resuming a sweep then update the n_trials by subtracting number of completed trials. Ex - n_trials = 10, already run = 6, then update n_trials = 4
         sweep_id=None,  # If you want to resume a sweep, else pass None
     )

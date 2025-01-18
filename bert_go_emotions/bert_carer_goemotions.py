@@ -233,12 +233,12 @@ def main():
 
     # Training arguments
     training_args = TrainingArguments(
-        output_dir="./finetuned_carer_goemotions_model",
-        run_name="bert-finetune-carer-goemotions",
+        output_dir="./finetuned_bert_carer_goemotions/output",
+        run_name="finetuned_bert_carer_goemotions",
         eval_strategy="steps",
         eval_steps=60,
         save_strategy="steps",
-        logging_dir="./logs",
+        logging_dir="./finetuned_bert_carer_goemotions/logs",
         report_to="wandb",
         save_total_limit=3,
         per_device_train_batch_size=32,
@@ -277,8 +277,8 @@ def main():
     model.eval()
 
     # Save the fine-tuned model and tokenizer
-    trainer.save_model("./finetuned_carer_goemotions_model")
-    tokenizer.save_pretrained("./finetuned_carer_goemotions_model")
+    trainer.save_model("./finetuned_bert_carer_goemotions")
+    tokenizer.save_pretrained("./finetuned_bert_carer_goemotions")
 
     # Test the model
     print("Testing the fine-tuned model on the test set...")

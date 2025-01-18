@@ -217,9 +217,9 @@ if __name__ == "__main__":
     train_dataset, val_dataset, test_dataset = load_datasets()
 
     # Load tokenizer and model
-    tokenizer = AutoTokenizer.from_pretrained("./finetuned_carer_goemotions_model")
+    tokenizer = AutoTokenizer.from_pretrained("./finetuned_bert_carer_goemotions")
     model = AutoModelForSequenceClassification.from_pretrained(
-        "./finetuned_carer_goemotions_model", num_labels=7
+        "./finetuned_bert_carer_goemotions", num_labels=7
     ).to(device)
 
     # Preprocess datasets

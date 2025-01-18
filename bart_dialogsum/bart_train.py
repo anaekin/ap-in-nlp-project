@@ -51,9 +51,9 @@ def transform_dialogsumm_to_huggingface_dataset(train, validation, test):
 
 
 raw_datasets = transform_dialogsumm_to_huggingface_dataset(
-    "../DialogSum_Data/dialogsum.train.jsonl",
-    "../DialogSum_Data/dialogsum.dev.jsonl",
-    "../DialogSum_Data/dialogsum.test.jsonl",
+    "./DialogSum_Data/dialogsum.train.jsonl",
+    "./DialogSum_Data/dialogsum.dev.jsonl",
+    "./DialogSum_Data/dialogsum.test.jsonl",
 )
 
 
@@ -81,7 +81,7 @@ def preprocess_function(examples):
 tokenized_datasets = raw_datasets.map(preprocess_function, batched=True)
 
 args = Seq2SeqTrainingArguments(
-    output_dir="./bart-finetune-output-2",
+    output_dir="./finetuned_bart_dialogsum/output",
     overwrite_output_dir=True,
     do_train=True,
     do_eval=True,
@@ -103,7 +103,7 @@ args = Seq2SeqTrainingArguments(
     save_total_limit=1,
     label_smoothing_factor=0.1,
     dataloader_num_workers=8,
-    logging_dir="./bart-finetune-output/logs",
+    logging_dir="./finetuned_bart_dialogsum/logs",
     predict_with_generate=True,
     generation_max_length=100,
     generation_num_beams=5,
@@ -173,7 +173,7 @@ def save_model(model, tokenizer, model_save_path):
     print(f"Model saved to {model_save_path}.")
 
 
-save_model(model, tokenizer, model_save_path="./bart-carer-goemotions/finetuned-output")
+save_model(model, tokenizer, model_save_path="./finetuned_bart_dialogsum")
 
 
 print("#" * 10)

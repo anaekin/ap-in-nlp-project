@@ -39,7 +39,7 @@ dataset = load_dataset("knkarthick/dialogsum")
 test_dataset = dataset["test"]
 test_dataset = test_dataset.select(range(1, test_dataset.num_rows, 3))
 
-# model_checkpoint = "./bart-finetune-output-2/checkpoint-2925"
+# model_checkpoint = "./finetuned_bart_dialogsum/checkpoint-2925"
 model_checkpoint = "facebook/bart-base"
 
 # Load models
@@ -47,7 +47,7 @@ bart_model = BartForConditionalGeneration.from_pretrained(model_checkpoint)
 bart_model.to(device)
 bart_tokenizer = BartTokenizer.from_pretrained("facebook/bart-base")
 bert_model = BertForSequenceClassification.from_pretrained(
-    "./finetuned_carer_goemotions_model"
+    "./finetuned_bert_carer_goemotions"
 )
 bert_model.to(device)
 bert_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
@@ -128,7 +128,7 @@ for sample in tqdm(test_dataset):
     )
 
 # Save results
-output_path = "sentence_level_emotion_results.json"
+output_path = "sentence_level_emotion_results_3.json"
 with open(output_path, "w") as f:
     json.dump(results, f, indent=2)
 print(f"Results saved to {output_path}")
