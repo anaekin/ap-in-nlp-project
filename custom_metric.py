@@ -19,35 +19,36 @@ emotion_labels = {
 emotion_labels_no_neutral = emotion_labels.copy()
 del emotion_labels_no_neutral[6]
 
+emotions_no_neutral = list(
+    emotion_labels_no_neutral.values()
+)  # Predefined list of all emotions
 all_emotions = list(emotion_labels.values())  # Predefined list of all emotions
 
 
-# Step 1: Compute Pattern Frequency (PF) for a given document
-def compute_pf(emotion_counts):
+def compute_ef(emotion_counts):
     """
-    Computes the Pattern Frequency (PF) for a document.
+    Computes the Pattern Frequency (EF) for a document.
 
     Args:
         emotion_counts (dict): A dictionary with emotions as keys and their frequency in the document as values.
 
     Returns:
-        dict: PF values for each emotion.
+        dict: EF values for each emotion.
     """
     total_emotion_freq = sum(
         emotion_counts.values()
     )  # Total frequency of all emotions in the document
-    pf = {}
+    ef = {}
 
     for emotion in all_emotions:
         freq_p_e = emotion_counts.get(
             emotion, 0
         )  # Frequency of emotion in the current document
-        pf[emotion] = math.log((total_emotion_freq + 1) / (freq_p_e + 1))  # PF formula
+        ef[emotion] = math.log((total_emotion_freq + 1) / (freq_p_e + 1))  # EF formula
 
-    return pf
+    return ef
 
 
-# Step 2: Compute Inverse Emotion Frequency (IEF) across the entire dataset
 def compute_ief(documents):
     """
     Computes the Inverse Emotion Frequency (IEF) for each emotion across all documents.
@@ -63,43 +64,43 @@ def compute_ief(documents):
 
     # Count how many documents contain each emotion
     for doc in documents:
-        seen_emotions = set(doc.keys())  # Unique emotions in the document
+        seen_emotions = [
+            e for e in set(doc.keys()) if e in all_emotions
+        ]  # Unique emotions in the document
+
         for emotion in seen_emotions:
             emotion_doc_freq[emotion] += 1
 
-    # Compute IEF using the pf-ief formula
+    # Compute IEF using the ef-ief formula
     ief = {}
     for emotion, freq in emotion_doc_freq.items():
-        ief[emotion] = math.log((freq + 1) / (N + 1))  # IEF formula
+        ief[emotion] = math.log(1 + N / (freq + 1))
 
     return ief
 
 
-# Step 3: Compute PF-IEF Score for a Document
-def compute_pf_ief(emotion_counts, ief):
+def compute_ef_ief(emotion_counts, ief):
     """
-    Computes the PF-IEF weighted emotion vector for a document.
+    Computes the EF-IEF weighted emotion vector for a document.
 
     Args:
         emotion_counts (dict): Emotion frequency counts for the document.
         ief (dict): Precomputed IEF values for each emotion.
 
     Returns:
-        dict: PF-IEF weighted emotion vector.
+        dict: EF-IEF weighted emotion vector.
     """
-    pf = compute_pf(emotion_counts)
-
-    # PF-IEF calculation: Multiply PF by IEF for each emotion
-    pf_ief = {emotion: pf[emotion] * ief.get(emotion, 0) for emotion in all_emotions}
-
-    return pf_ief
+    ef = compute_ef(emotion_counts)
+    # EF-IEF calculation: Multiply EF by IEF for each emotion
+    ef_ief = {emotion: ef[emotion] * ief.get(emotion, 0) for emotion in all_emotions}
+    return ef_ief
 
 
 # Helper function to normalize emotion counts into probability distributions
 def normalize_emotions(emotion_counts):
     total_count = sum(emotion_counts.values())
     if total_count == 0:
-        return {emotion: 0 for emotion in emotion_labels_no_neutral.values()}
+        return {emotion: 0 for emotion in all_emotions}
     return {emotion: count / total_count for emotion, count in emotion_counts.items()}
 
 
@@ -107,14 +108,8 @@ def normalize_emotions(emotion_counts):
 def calculate_kl_divergence(p, q, smoothing_factor=1e-9):
 
     # Add smoothing factor to avoid zero probability values
-    p = {
-        key: p.get(key, 0) + smoothing_factor
-        for key in emotion_labels_no_neutral.values()
-    }
-    q = {
-        key: q.get(key, 0) + smoothing_factor
-        for key in emotion_labels_no_neutral.values()
-    }
+    p = {key: p.get(key, 0) + smoothing_factor for key in all_emotions}
+    q = {key: q.get(key, 0) + smoothing_factor for key in all_emotions}
 
     # Normalize the distributions
     p_norm = normalize_emotions(p)
@@ -128,72 +123,51 @@ def calculate_cosine_similarity(tfidf_dialogue, tfidf_summary):
 
 
 # Function to process the list of emotions and calculate Spearman and similarity
-def process_emotions(emotions_list):
-    cosine_similarities_dialogue_human = []
-    cosine_similarities_dialogue_machine = []
-    kl_losses_dialogue_human = []
-    kl_losses_dialogue_machine = []
+def process_emotions(emotions_list, summary_type="human"):
+    cosine_similarities_dialogue_summary = []
+    kl_losses_dialogue_summary = []
 
-    # Prepare the documents for TF-IDF calculation
+    # Prepare the documents for EF-IEF calculation
     corpus_dialogue = []
-    corpus_human_summary = []
-    corpus_machine_summary = []
+    corpus_summary = []
 
     for emotions in emotions_list:
         corpus_dialogue.append(emotions["dialogue_emotions"])
-        corpus_human_summary.append(emotions["human_summary_emotions"])
-        corpus_machine_summary.append(emotions["machine_summary_emotions"])
+        corpus_summary.append(emotions[f"{summary_type}_summary_emotions"])
 
-    # Calculate IDF for the entire corpus
     ief_dialogue = compute_ief(corpus_dialogue)
-    ief_human = compute_ief(corpus_human_summary)
-    ief_machine = compute_ief(corpus_machine_summary)
+    ief_summary = compute_ief(corpus_summary)
 
-    # Calculate the cosine similarities and TF-IDF for each document
+    # Calculate the cosine similarities and EF-IEF for each document
     for i in range(len(emotions_list)):
         dialogue_emotions = corpus_dialogue[i]
-        human_summary_emotions = corpus_human_summary[i]
-        machine_summary_emotions = corpus_machine_summary[i]
+        summary_emotions = corpus_summary[i]
 
-        # Compute TF-IDF for each document
-        pf_ief_dialogue = compute_pf_ief(dialogue_emotions, ief_dialogue)
-        pf_ief_human = compute_pf_ief(human_summary_emotions, ief_human)
-        pf_ief_machine = compute_pf_ief(machine_summary_emotions, ief_machine)
+        # Compute EF-IEF for each document
+        ef_ief_dialogue = compute_ef_ief(dialogue_emotions, ief_dialogue)
+        ef_ief_summary = compute_ef_ief(summary_emotions, ief_summary)
 
         # Calculate cosine similarity between Dialogue and Human, and Dialogue and Machine
-        cosine_sim_dialogue_human = calculate_cosine_similarity(
-            pf_ief_dialogue, pf_ief_human
-        )
-        cosine_sim_dialogue_machine = calculate_cosine_similarity(
-            pf_ief_dialogue, pf_ief_machine
+        cosine_sim_dialogue_summary = calculate_cosine_similarity(
+            ef_ief_dialogue, ef_ief_summary
         )
 
         # Calculate KL divergence (KL Loss) between Dialogue and Human, and Dialogue and Machine
-        kl_loss_dialogue_human = calculate_kl_divergence(
-            dialogue_emotions, human_summary_emotions
-        )
-        kl_loss_dialogue_machine = calculate_kl_divergence(
-            dialogue_emotions, machine_summary_emotions
+        kl_loss_dialogue_summary = calculate_kl_divergence(
+            dialogue_emotions, summary_emotions
         )
 
-        cosine_similarities_dialogue_human.append(cosine_sim_dialogue_human)
-        cosine_similarities_dialogue_machine.append(cosine_sim_dialogue_machine)
-        kl_losses_dialogue_human.append(kl_loss_dialogue_human)
-        kl_losses_dialogue_machine.append(kl_loss_dialogue_machine)
-
-    # Calculate Spearman correlation between dialogue vs human and dialogue vs machine cosine similarities
-    spearman_corr = spearmanr(
-        cosine_similarities_dialogue_human, cosine_similarities_dialogue_machine
-    )[0]
+        cosine_similarities_dialogue_summary.append(cosine_sim_dialogue_summary)
+        kl_losses_dialogue_summary.append(kl_loss_dialogue_summary)
 
     # Average KL loss across all records
-    avg_kl_loss_human = np.mean(kl_losses_dialogue_human)
-    avg_kl_loss_machine = np.mean(kl_losses_dialogue_machine)
+    mean_cosine_sim = np.mean(cosine_similarities_dialogue_summary)
+    avg_kl_loss = np.mean(kl_losses_dialogue_summary)
 
-    return spearman_corr, avg_kl_loss_human, avg_kl_loss_machine
+    return mean_cosine_sim, avg_kl_loss
 
 
-def calculate_eres(emotions_list_path, alpha=0.5, lambda_=1.0):
+def calculate_eres(emotions_list_path, alpha=0.5, lambda_=1.0, summary_type="human"):
     """
     Calculate the Emotion Retention Score (ERES) using the formula:
     ERES = 𝛼 · RACS + (1 − 𝛼) · exp(−𝜆 · AACS)
@@ -226,28 +200,30 @@ def calculate_eres(emotions_list_path, alpha=0.5, lambda_=1.0):
     with open(emotions_list_path, "r") as file:
         emotions_list = json.load(file)
 
+    # Print the results
+    print(f"Summary Type: {summary_type.capitalize()}")
+
     # Process the emotions list and calculate Spearman correlation and KL loss
-    spearman, kl_div_human, kl_div_machine = process_emotions(emotions_list)
+    avg_cs, avg_kl = process_emotions(emotions_list, summary_type)
 
     # Normalize spearman to get RACS
-    RACS = (spearman + 1) / 2
+    RACS = (avg_cs + 1) / 2
 
-    AACS_reference = np.exp(-lambda_ * kl_div_human)
-    AACS_generated = np.exp(-lambda_ * kl_div_machine)
+    AACS = np.exp(-lambda_ * avg_kl)
 
-    # Apply the ERES formula
-    ERES_reference = alpha * RACS + (1 - alpha) * AACS_reference
-    ERES_generated = alpha * RACS + (1 - alpha) * AACS_generated
+    ERES = alpha * RACS + (1 - alpha) * AACS
 
-    return RACS, AACS_generated, ERES_generated
+    return RACS, AACS, ERES
 
 
 # ERES_human = calculate_eres(RACS, AACS_human)
 RACS, AACS, ERES = calculate_eres(
-    emotions_list_path="./sentence_level_emotion_results_bart_large.json"
+    # emotions_list_path="./results/sentence_level_emotion_results_bart_large_ds.json",
+    # emotions_list_path="./results/sentence_level_emotion_results_bart_large_cnn.json",
+    emotions_list_path="./results/sentence_level_emotion_results_t5_base.json",
+    summary_type="machine",
+    lambda_=1.0,
 )
-
-# Print the results
 print(f"RACS: {RACS:.3f}")
 # print(f"Average KL Loss (Human Summary): {AACS_human:.3f}")
 print(f"AACS: {AACS:.3f}")

@@ -40,17 +40,17 @@ test_dataset = dataset["test"]
 test_dataset = test_dataset.select(range(1, test_dataset.num_rows, 3))
 
 # model_checkpoint = "./finetuned_bart_dialogsum/checkpoint-2925"
-model_checkpoint = "facebook/bart-base"
+model_checkpoint = "facebook/bart-large"
+bert_model_checkpoint = "./finetuned_bert_carer_goemotions"
 
 # Load models
 bart_model = BartForConditionalGeneration.from_pretrained(model_checkpoint)
 bart_model.to(device)
-bart_tokenizer = BartTokenizer.from_pretrained("facebook/bart-base")
-bert_model = BertForSequenceClassification.from_pretrained(
-    "./finetuned_bert_carer_goemotions"
-)
+bart_tokenizer = BartTokenizer.from_pretrained(model_checkpoint)
+
+bert_model = BertForSequenceClassification.from_pretrained(bert_model_checkpoint)
 bert_model.to(device)
-bert_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+bert_tokenizer = BertTokenizer.from_pretrained(bert_model_checkpoint)
 
 
 # Helper functions
